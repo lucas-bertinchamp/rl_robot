@@ -1,0 +1,128 @@
+import pygame
+import pymunk
+import pymunk.pygame_util
+
+from robotPygame import Robot
+from envRLdqn import EnvRLDQN
+
+import gym
+import numpy as np
+import stable_baselines3
+import stable_baselines3.common.env_checker
+from stable_baselines3 import PPO, DQN
+from stable_baselines3.common.env_util import make_vec_env
+from functools import partial
+
+from typing import Callable
+
+
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    Linear learning rate schedule.
+
+    :param initial_value: Initial learning rate.
+    :return: schedule that computes
+      current learning rate depending on remaining progress
+    """
+
+    def func(progress_remaining: float) -> float:
+        """
+        Progress will decrease from 1 (beginning) to 0.
+
+        :param progress_remaining:
+        :return: current learning rate
+        """
+        return progress_remaining * initial_value
+
+    return func
+
+
+def train_model(dim, n_envs, n_timesteps, model_name):
+    env = make_vec_env(partial(EnvRLDQN, dim), n_envs=n_envs)
+    model = DQN(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        device="cpu",
+        learning_rate=0.001,
+        exploration_final_eps=0.1,
+    )
+
+    model.learn(total_timesteps=n_timesteps, reset_num_timesteps=False)
+    model.save("2d/pygame/DQN/trained/{}".format(model_name))
+
+
+def train_existing_model(dim, n_envs, n_timesteps, model_name, n_iters):
+    env = make_vec_env(partial(EnvRLDQN, dim), n_envs=n_envs)
+    model = DQN.load(
+        "2d/pygame/DQN/trained/{}".format(model_name),
+        env=env,
+        device="cpu",
+        verbose=1,
+    )
+
+    for i in range(n_iters):
+        model.learn(total_timesteps=n_timesteps, reset_num_timesteps=False)
+        model.save(
+            "2d/pygame/DQN/trained/{}{}".format(model_name, (i + 1) * n_timesteps)
+        )
+
+
+def test_model(model_name, render=False, verbose=True):
+    env = EnvRLDQN(2)
+    model = DQN.load("2d/pygame/DQN/trained/{}".format(model_name))
+    obs = env.reset()
+
+    if render:
+        pygame.init()
+        screen = pygame.display.set_mode((width, height))
+        clock = pygame.time.Clock()
+        running = True
+        font = pygame.font.SysFont("Arial", 16)
+        draw_options = pymunk.pygame_util.DrawOptions(screen)
+
+    while True:
+        action, _states = model.predict(obs, deterministic=True)
+        obs, reward, done, info = env.step(action)
+
+        if render:
+            screen.fill(pygame.Color("black"))
+
+            for ray in env.rays:
+                env.space.add(ray)
+
+            env.space.debug_draw(draw_options)
+            pygame.display.flip()
+            clock.tick(fps)
+
+            for ray in env.rays:
+                env.space.remove(ray)
+
+            env.rays = []
+
+        if verbose:
+            print("----------------------------------")
+            print("Timestep : " + str(env.nbStep))
+            print("Action choisie : " + str(action))
+            print("Speed : " + str(env.robot.speed))
+            print("Angle : " + str(env.robot.angle))
+            print("Position : " + str(env.robot.get_position()))
+            print("Reward : " + str(reward))
+            print("Distance : " + str(info["distance"]))
+            print("Distance obs : " + str(obs[6:]))
+
+        if done:
+            obs = env.reset()
+
+
+def play_robot(dim):
+    r = Robot(dim)
+    r.simulation()
+
+
+if __name__ == "__main__":
+    width, height = 700, 600
+    fps = 500
+
+    train_model(2, 1, 500000, "withoutObstaclesDQN4")
+    train_existing_model(2, 1, 500000, "withoutObstaclesDQN4", 10)
